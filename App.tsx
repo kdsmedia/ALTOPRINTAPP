@@ -22,10 +22,11 @@ import { usbService } from './services/usbService';
 import { processToThermal } from './utils/thermalProcessor';
 
 /** 
- * FIX: Gunakan CDN cdnjs untuk worker agar lebih stabil di berbagai browser/environment 
- * Versi harus sama persis dengan library yang di-import
+ * FIX PDF: Gunakan worker dari sumber yang sama dengan library (esm.sh)
+ * Menambahkan standardFontDataUrl untuk rendering teks yang lebih stabil
  */
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs`;
+const PDFJS_VERSION = '4.0.379';
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.mjs`;
 
 // --- Constants ---
 const APP_LOGO_URL = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEjWrsxhrCF6FKRh9DnNBd3OzTH0X-EzoHau9zd8BSkKZzoRD-cDWLhtRluLW8FXHd9sxdZSutRlTAcghHKi8ZVapoCSOZmNA3kb9Gm6CIxpFJhYVeFkiHgtWxrvo11ldl8_8GpjNEvsvj3QOSB0PkPDAkyO7tNTPmTBeym5ij9evvK1V52dsx-A7RPE95hk/s500/Gemini_Generated_Image_3r9p5m3r9p5m3r9p-removebg-preview.png";
@@ -135,7 +136,7 @@ const App: React.FC = () => {
     } catch (e) { triggerAlert("Koneksi USB Gagal", "error"); }
   };
 
-  // FIX: Logika Pemuatan File PDF & Gambar yang lebih kokoh
+  // FIX PDF & IMAGE HANDLING
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'IMAGE' | 'PDF') => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -145,40 +146,54 @@ const App: React.FC = () => {
       r.onload = (ev) => { 
         setUploadedImage(ev.target?.result as string); 
         setPrintMode('IMAGE'); 
-        triggerAlert("Gambar Berhasil Dimuat", "success"); 
+        triggerAlert("Foto Dimuat", "success"); 
       };
       r.readAsDataURL(file);
     } else if (type === 'PDF') {
       const r = new FileReader();
-      triggerAlert("Sedang Memproses PDF...", "info");
+      triggerAlert("Memproses PDF...", "info");
       r.onload = async (ev) => {
         try {
-          const typedarray = new Uint8Array(ev.target?.result as ArrayBuffer);
-          const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
-          const page = await pdf.getPage(1); // Ambil halaman pertama
+          const buffer = ev.target?.result as ArrayBuffer;
+          const typedarray = new Uint8Array(buffer);
           
-          const viewport = page.getViewport({ scale: 2.0 }); // Skala lebih tinggi agar teks tajam
+          // Validasi Sederhana: PDF Magic Number check (%PDF-)
+          const header = String.fromCharCode(...typedarray.slice(0, 5));
+          if (header !== '%PDF-') {
+             throw new Error("Bukan file PDF yang valid.");
+          }
+
+          const loadingTask = pdfjsLib.getDocument({
+             data: typedarray,
+             // Fix untuk sandbox: matikan font face eksternal & gunakan font standar
+             disableFontFace: true,
+             standardFontDataUrl: `https://esm.sh/pdfjs-dist@${PDFJS_VERSION}/standard_fonts/`
+          });
+
+          const pdf = await loadingTask.promise;
+          const page = await pdf.getPage(1);
+          
+          // Rendering dengan skala yang cukup untuk thermal (2x)
+          const viewport = page.getViewport({ scale: 2.0 });
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
           
-          if (!ctx) throw new Error("Gagal menginisialisasi context canvas");
+          if (!ctx) throw new Error("Canvas Context Error");
           
           canvas.height = viewport.height;
           canvas.width = viewport.width;
 
-          // Render halaman PDF ke canvas
-          const renderTask = page.render({ canvasContext: ctx, viewport });
-          await renderTask.promise;
+          await page.render({ canvasContext: ctx, viewport }).promise;
           
           setPdfCanvas(canvas); 
           setPrintMode('PDF'); 
-          triggerAlert("PDF Siap Dicetak", "success");
-        } catch (err) { 
-          console.error("PDF Render Error:", err);
-          triggerAlert("Format PDF Tidak Didukung atau Rusak", "error"); 
+          triggerAlert("PDF Siap Cetak", "success");
+        } catch (err: any) { 
+          console.error("PDF Fail:", err);
+          triggerAlert(err.message || "PDF Rusak atau Tidak Didukung", "error"); 
         }
       };
-      r.onerror = () => triggerAlert("Gagal Membaca File PDF", "error");
+      r.onerror = () => triggerAlert("Gagal membaca file", "error");
       r.readAsArrayBuffer(file);
     }
   };
@@ -507,7 +522,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Settings Modal - RESTORED EVERYTHING */}
+      {/* Settings Modal */}
       {activeModal === ModalType.SETTINGS && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
           <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl overflow-y-auto max-h-[90vh]">
@@ -550,9 +565,9 @@ const App: React.FC = () => {
              <button onClick={() => setActiveModal(ModalType.SETTINGS)} className="absolute top-6 right-6 p-2 bg-slate-100 dark:bg-slate-800 rounded-full"><ArrowLeft className="w-4 h-4 dark:text-white"/></button>
              <h3 className="font-black text-xs uppercase tracking-widest mb-6 dark:text-white flex items-center gap-2"><Shield className="w-5 h-5 text-blue-600"/> Privasi</h3>
              <div className="text-[10px] text-slate-500 dark:text-slate-400 space-y-4 max-h-[50vh] overflow-y-auto pr-2">
-                <p><strong>1. Keamanan Data:</strong> HerniPrint Pro tidak mengirimkan data transaksi, kasir, atau gambar Anda ke server manapun. Semua proses terjadi 100% lokal di browser Anda.</p>
+                <p><strong>1. Keamanan Data:</strong> HerniPrint Pro tidak mengirimkan data transaksi ke server manapun. Semua proses lokal di browser Anda.</p>
                 <p><strong>2. Izin Perangkat:</strong> Izin Bluetooth, USB, dan Kamera hanya digunakan saat aplikasi aktif untuk mencetak atau men-scan kode.</p>
-                <p><strong>3. Penyimpanan:</strong> Data yang Anda input akan terhapus jika cache browser dibersihkan.</p>
+                <p><strong>3. Penyimpanan:</strong> Data input akan terhapus jika cache browser dibersihkan.</p>
              </div>
              <button onClick={() => setActiveModal(ModalType.SETTINGS)} className="w-full py-4 mt-8 bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-2xl font-black text-[10px] uppercase">Mengerti</button>
           </div>
@@ -566,8 +581,8 @@ const App: React.FC = () => {
              <button onClick={() => setActiveModal(ModalType.SETTINGS)} className="absolute top-6 right-6 p-2 bg-slate-100 dark:bg-slate-800 rounded-full"><ArrowLeft className="w-4 h-4 dark:text-white"/></button>
              <h3 className="font-black text-xs uppercase tracking-widest mb-6 dark:text-white flex items-center gap-2"><FileWarning className="w-5 h-5 text-amber-500"/> Disclaimer</h3>
              <div className="text-[10px] text-slate-500 dark:text-slate-400 space-y-4 max-h-[50vh] overflow-y-auto pr-2">
-                <p><strong>Pelepasan Tanggung Jawab:</strong> HerniPrint Pro adalah alat bantu cetak. Kami tidak bertanggung jawab atas kesalahan data pada struk, kerusakan printer akibat penggunaan, atau penyalahgunaan fitur aplikasi.</p>
-                <p><strong>Kompatibilitas:</strong> Hasil cetak tergantung pada merk printer thermal masing-masing. Tidak semua printer mendukung fitur dithering gambar dengan sempurna.</p>
+                <p><strong>Tanggung Jawab:</strong> HerniPrint Pro adalah alat bantu cetak. Kami tidak bertanggung jawab atas kesalahan data pada struk atau kerusakan printer.</p>
+                <p><strong>Kompatibilitas:</strong> Hasil cetak tergantung pada merk printer thermal masing-masing.</p>
              </div>
              <button onClick={() => setActiveModal(ModalType.SETTINGS)} className="w-full py-4 mt-8 bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-2xl font-black text-[10px] uppercase">Saya Setuju</button>
           </div>
@@ -581,7 +596,7 @@ const App: React.FC = () => {
              <div className="absolute top-0 left-0 w-full h-1 bg-blue-600"></div>
              <img src={APP_LOGO_URL} className="w-20 h-20 mx-auto mb-4" />
              <h2 className="font-black text-xs uppercase tracking-[5px] dark:text-white">HERNIPRINT <span className="text-blue-600">PRO</span></h2>
-             <p className="text-[9px] font-bold text-slate-400 uppercase mt-1 mb-6">Build 1.2.6 - Professional Suite</p>
+             <p className="text-[9px] font-bold text-slate-400 uppercase mt-1 mb-6">Build 1.2.7 - Professional Suite</p>
              <div className="space-y-4 text-left border-y dark:border-slate-800 py-6 mb-6">
                 <div className="flex gap-4 items-start"><ShieldCheck className="w-5 h-5 text-blue-600 mt-1"/><p className="text-[10px] text-slate-500 dark:text-slate-300 leading-relaxed">Berjalan 100% lokal. Data Anda aman tanpa pengiriman data eksternal.</p></div>
                 <div className="flex gap-4 items-start"><Cpu className="w-5 h-5 text-indigo-600 mt-1"/><p className="text-[10px] text-slate-500 dark:text-slate-300 leading-relaxed">Support Printer Thermal ESC/POS via Bluetooth & USB.</p></div>
