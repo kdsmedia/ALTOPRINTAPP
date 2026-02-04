@@ -1,9 +1,32 @@
 
 {
-  "name": "HERNIPRINT Pro",
-  "description": "Professional thermal printing application with Bluetooth/USB connectivity, PDF support, and receipt management.",
-  "requestFramePermissions": [
-    "bluetooth",
-    "usb"
-  ]
+  "name": "herniprint-pro",
+  "private": true,
+  "version": "1.2.5",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "lucide-react": "^0.463.0",
+    "qrcode": "^1.5.4",
+    "jsbarcode": "^3.11.6",
+    "pdfjs-dist": "^4.0.379",
+    "html5-qrcode": "^2.3.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.16",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  }
 }
