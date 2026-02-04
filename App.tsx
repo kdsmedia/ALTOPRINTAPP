@@ -21,8 +21,11 @@ import { printerService } from './services/bluetoothService';
 import { usbService } from './services/usbService';
 import { processToThermal } from './utils/thermalProcessor';
 
-// Configure PDF.js Worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs`;
+/** 
+ * FIX: Gunakan CDN cdnjs untuk worker agar lebih stabil di berbagai browser/environment 
+ * Versi harus sama persis dengan library yang di-import
+ */
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs`;
 
 // --- Constants ---
 const APP_LOGO_URL = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEjWrsxhrCF6FKRh9DnNBd3OzTH0X-EzoHau9zd8BSkKZzoRD-cDWLhtRluLW8FXHd9sxdZSutRlTAcghHKi8ZVapoCSOZmNA3kb9Gm6CIxpFJhYVeFkiHgtWxrvo11ldl8_8GpjNEvsvj3QOSB0PkPDAkyO7tNTPmTBeym5ij9evvK1V52dsx-A7RPE95hk/s500/Gemini_Generated_Image_3r9p5m3r9p5m3r9p-removebg-preview.png";
@@ -132,29 +135,50 @@ const App: React.FC = () => {
     } catch (e) { triggerAlert("Koneksi USB Gagal", "error"); }
   };
 
+  // FIX: Logika Pemuatan File PDF & Gambar yang lebih kokoh
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'IMAGE' | 'PDF') => {
     const file = e.target.files?.[0];
     if (!file) return;
+
     if (type === 'IMAGE') {
       const r = new FileReader();
-      r.onload = (ev) => { setUploadedImage(ev.target?.result as string); setPrintMode('IMAGE'); triggerAlert("Gambar Dimuat", "success"); };
+      r.onload = (ev) => { 
+        setUploadedImage(ev.target?.result as string); 
+        setPrintMode('IMAGE'); 
+        triggerAlert("Gambar Berhasil Dimuat", "success"); 
+      };
       r.readAsDataURL(file);
     } else if (type === 'PDF') {
       const r = new FileReader();
+      triggerAlert("Sedang Memproses PDF...", "info");
       r.onload = async (ev) => {
         try {
           const typedarray = new Uint8Array(ev.target?.result as ArrayBuffer);
-          const pdf = await pdfjsLib.getDocument(typedarray).promise;
-          const page = await pdf.getPage(1);
-          const viewport = page.getViewport({ scale: 2 });
+          const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
+          const page = await pdf.getPage(1); // Ambil halaman pertama
+          
+          const viewport = page.getViewport({ scale: 2.0 }); // Skala lebih tinggi agar teks tajam
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
+          
+          if (!ctx) throw new Error("Gagal menginisialisasi context canvas");
+          
           canvas.height = viewport.height;
           canvas.width = viewport.width;
-          await page.render({ canvasContext: ctx!, viewport }).promise;
-          setPdfCanvas(canvas); setPrintMode('PDF'); triggerAlert("PDF Siap Cetak", "success");
-        } catch (err) { triggerAlert("PDF Error", "error"); }
+
+          // Render halaman PDF ke canvas
+          const renderTask = page.render({ canvasContext: ctx, viewport });
+          await renderTask.promise;
+          
+          setPdfCanvas(canvas); 
+          setPrintMode('PDF'); 
+          triggerAlert("PDF Siap Dicetak", "success");
+        } catch (err) { 
+          console.error("PDF Render Error:", err);
+          triggerAlert("Format PDF Tidak Didukung atau Rusak", "error"); 
+        }
       };
+      r.onerror = () => triggerAlert("Gagal Membaca File PDF", "error");
       r.readAsArrayBuffer(file);
     }
   };
@@ -244,12 +268,12 @@ const App: React.FC = () => {
 
           ctx.textAlign = 'left'; ctx.font = 'bold 18px monospace';
           ctx.fillText("PENERIMA:", 20, y); y += 30;
-          ctx.font = 'bold 26px monospace'; ctx.fillText((shippingData.toName || "Nama").toUpperCase(), 20, y); y += 35;
+          ctx.font = 'bold 26px monospace'; ctx.fillText((shippingData.toName || "Nama Penerima").toUpperCase(), 20, y); y += 35;
           ctx.font = '20px monospace'; ctx.fillText(shippingData.toPhone || "No HP", 20, y); y += 40;
           
           ctx.font = '18px monospace';
           const wrapText = (t: string, max: number) => {
-            if(!t) return ["Alamat"];
+            if(!t) return ["Alamat Lengkap"];
             const words = t.split(' '); let lines = []; let current = '';
             words.forEach(w => { if ((current + w).length > max) { lines.push(current); current = w + ' '; } else current += w + ' '; });
             lines.push(current); return lines;
@@ -557,7 +581,7 @@ const App: React.FC = () => {
              <div className="absolute top-0 left-0 w-full h-1 bg-blue-600"></div>
              <img src={APP_LOGO_URL} className="w-20 h-20 mx-auto mb-4" />
              <h2 className="font-black text-xs uppercase tracking-[5px] dark:text-white">HERNIPRINT <span className="text-blue-600">PRO</span></h2>
-             <p className="text-[9px] font-bold text-slate-400 uppercase mt-1 mb-6">Build 1.2.5 - Professional Suite</p>
+             <p className="text-[9px] font-bold text-slate-400 uppercase mt-1 mb-6">Build 1.2.6 - Professional Suite</p>
              <div className="space-y-4 text-left border-y dark:border-slate-800 py-6 mb-6">
                 <div className="flex gap-4 items-start"><ShieldCheck className="w-5 h-5 text-blue-600 mt-1"/><p className="text-[10px] text-slate-500 dark:text-slate-300 leading-relaxed">Berjalan 100% lokal. Data Anda aman tanpa pengiriman data eksternal.</p></div>
                 <div className="flex gap-4 items-start"><Cpu className="w-5 h-5 text-indigo-600 mt-1"/><p className="text-[10px] text-slate-500 dark:text-slate-300 leading-relaxed">Support Printer Thermal ESC/POS via Bluetooth & USB.</p></div>
