@@ -1,9 +1,9 @@
 {
   "requestFramePermissions": [
-    "camera",
     "bluetooth",
-    "usb"
+    "usb",
+    "camera"
   ],
-  "name": "ALTO PRINT",
-  "description": "Professional Thermal Printing Suite with AI and Hardware Support"
+  "name": "HERNIPRINT Pro",
+  "description": "Professional Hardware-First Thermal Printing Suite"
 }

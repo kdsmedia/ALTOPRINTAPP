@@ -5,7 +5,6 @@ export class UsbPrinterService {
 
   async connect(): Promise<string> {
     try {
-      // Menambahkan filter kosong jika platform membutuhkan parameter
       const device = await (navigator as any).usb.requestDevice({ filters: [] });
       await device.open();
       
@@ -13,10 +12,8 @@ export class UsbPrinterService {
         await device.selectConfiguration(1);
       }
       
-      // Biasanya printer termal menggunakan interface 0
       await device.claimInterface(0);
 
-      // Cari endpoint OUT untuk mengirim data
       const interface0 = device.configuration.interfaces[0];
       const alternate = interface0.alternate;
       const endpoint = alternate.endpoints.find((e: any) => e.direction === 'out' && e.type === 'bulk');
@@ -35,10 +32,19 @@ export class UsbPrinterService {
     }
   }
 
+  getDeviceInfo() {
+    if (!this.device) return null;
+    return {
+      name: this.device.productName,
+      manufacturer: this.device.manufacturerName,
+      vendorId: this.device.vendorId,
+      productId: this.device.productId
+    };
+  }
+
   async sendRaw(data: Uint8Array): Promise<void> {
     if (!this.device || this.endpointOut === -1) throw new Error("Printer USB tidak terhubung");
 
-    // USB biasanya mendukung transfer yang jauh lebih besar dari BLE
     const chunkSize = 64;
     for (let i = 0; i < data.byteLength; i += chunkSize) {
       const chunk = data.slice(i, i + chunkSize);

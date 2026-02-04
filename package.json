@@ -3,6 +3,7 @@
   "name": "HERNIPRINT Pro",
   "description": "Professional thermal printing application with Bluetooth/USB connectivity, PDF support, and receipt management.",
   "requestFramePermissions": [
-    "camera"
+    "bluetooth",
+    "usb"
   ]
 }

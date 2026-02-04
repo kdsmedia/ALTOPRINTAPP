@@ -22,7 +22,10 @@ export interface ShippingData {
   toPhone: string;
   toAddress: string;
   fromName: string;
+  fromPhone: string;
   courier: string;
+  trackingNumber: string;
+  note: string;
 }
 
 export enum ModalType {
