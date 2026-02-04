@@ -1,0 +1,9 @@
+{
+  "requestFramePermissions": [
+    "camera",
+    "bluetooth",
+    "usb"
+  ],
+  "name": "ALTO PRINT",
+  "description": "Professional Thermal Printing Suite with AI and Hardware Support"
+}
