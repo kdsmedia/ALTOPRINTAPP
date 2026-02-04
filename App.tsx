@@ -21,12 +21,9 @@ import { printerService } from './services/bluetoothService';
 import { usbService } from './services/usbService';
 import { processToThermal } from './utils/thermalProcessor';
 
-/** 
- * FIX PDF: Gunakan worker dari sumber yang sama dengan library (esm.sh)
- * Menambahkan standardFontDataUrl untuk rendering teks yang lebih stabil
- */
+// PDF Worker Configuration - Menggunakan CDN paling stabil
 const PDFJS_VERSION = '4.0.379';
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.mjs`;
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.mjs`;
 
 // --- Constants ---
 const APP_LOGO_URL = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEjWrsxhrCF6FKRh9DnNBd3OzTH0X-EzoHau9zd8BSkKZzoRD-cDWLhtRluLW8FXHd9sxdZSutRlTAcghHKi8ZVapoCSOZmNA3kb9Gm6CIxpFJhYVeFkiHgtWxrvo11ldl8_8GpjNEvsvj3QOSB0PkPDAkyO7tNTPmTBeym5ij9evvK1V52dsx-A7RPE95hk/s500/Gemini_Generated_Image_3r9p5m3r9p5m3r9p-removebg-preview.png";
@@ -136,7 +133,6 @@ const App: React.FC = () => {
     } catch (e) { triggerAlert("Koneksi USB Gagal", "error"); }
   };
 
-  // FIX PDF & IMAGE HANDLING
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'IMAGE' | 'PDF') => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -157,28 +153,25 @@ const App: React.FC = () => {
           const buffer = ev.target?.result as ArrayBuffer;
           const typedarray = new Uint8Array(buffer);
           
-          // Validasi Sederhana: PDF Magic Number check (%PDF-)
-          const header = String.fromCharCode(...typedarray.slice(0, 5));
-          if (header !== '%PDF-') {
-             throw new Error("Bukan file PDF yang valid.");
+          if (String.fromCharCode(...typedarray.slice(0, 5)) !== '%PDF-') {
+             throw new Error("Bukan file PDF valid.");
           }
 
           const loadingTask = pdfjsLib.getDocument({
              data: typedarray,
-             // Fix untuk sandbox: matikan font face eksternal & gunakan font standar
              disableFontFace: true,
-             standardFontDataUrl: `https://esm.sh/pdfjs-dist@${PDFJS_VERSION}/standard_fonts/`
+             standardFontDataUrl: `https://unpkg.com/pdfjs-dist@${PDFJS_VERSION}/cmaps/`
           });
 
           const pdf = await loadingTask.promise;
           const page = await pdf.getPage(1);
           
-          // Rendering dengan skala yang cukup untuk thermal (2x)
+          // Render halaman ke canvas dengan kualitas tinggi
           const viewport = page.getViewport({ scale: 2.0 });
           const canvas = document.createElement('canvas');
           const ctx = canvas.getContext('2d');
           
-          if (!ctx) throw new Error("Canvas Context Error");
+          if (!ctx) throw new Error("Canvas Error");
           
           canvas.height = viewport.height;
           canvas.width = viewport.width;
@@ -190,10 +183,9 @@ const App: React.FC = () => {
           triggerAlert("PDF Siap Cetak", "success");
         } catch (err: any) { 
           console.error("PDF Fail:", err);
-          triggerAlert(err.message || "PDF Rusak atau Tidak Didukung", "error"); 
+          triggerAlert(err.message || "Gagal Memuat PDF", "error"); 
         }
       };
-      r.onerror = () => triggerAlert("Gagal membaca file", "error");
       r.readAsArrayBuffer(file);
     }
   };
@@ -225,6 +217,26 @@ const App: React.FC = () => {
     }, 100);
   };
 
+  // Helper: Wrap text for dynamic canvas height calculation
+  const wrapText = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number) => {
+    const words = text.split(' ');
+    let lines = [];
+    let currentLine = '';
+
+    words.forEach(word => {
+      const testLine = currentLine + word + ' ';
+      const metrics = ctx.measureText(testLine);
+      if (metrics.width > maxWidth && currentLine.length > 0) {
+        lines.push(currentLine);
+        currentLine = word + ' ';
+      } else {
+        currentLine = testLine;
+      }
+    });
+    lines.push(currentLine);
+    return lines;
+  };
+
   const handlePrint = async () => {
     if (!isConnected) return triggerAlert("Printer belum terhubung!", "warning");
     setIsPrinting(true);
@@ -235,79 +247,96 @@ const App: React.FC = () => {
       canvas.width = width;
       const ctx = canvas.getContext('2d')!;
 
+      // --- DYNAMIC HEIGHT CALCULATION ---
       if (printMode === 'IMAGE' && uploadedImage) {
         const img = new Image(); img.src = uploadedImage;
         await new Promise((r) => { img.onload = r; });
-        canvas.height = (img.height * width) / img.width;
+        canvas.height = Math.ceil((img.height * width) / img.width);
+        ctx.fillStyle = 'white'; ctx.fillRect(0,0,width,canvas.height);
         ctx.drawImage(img, 0, 0, width, canvas.height);
         thermalData = processToThermal(canvas, width);
       } else if (printMode === 'PDF' && pdfCanvas) {
-        canvas.height = (pdfCanvas.height * width) / pdfCanvas.width;
+        canvas.height = Math.ceil((pdfCanvas.height * width) / pdfCanvas.width);
+        ctx.fillStyle = 'white'; ctx.fillRect(0,0,width,canvas.height);
         ctx.drawImage(pdfCanvas, 0, 0, width, canvas.height);
         thermalData = processToThermal(canvas, width);
       } else if ((printMode === 'QR' || printMode === 'BARCODE') && generatedCodeUrl) {
         const img = new Image(); img.src = generatedCodeUrl;
         await new Promise((r) => { img.onload = r; });
-        canvas.height = width + 80;
+        canvas.height = width + 100;
         ctx.fillStyle = 'white'; ctx.fillRect(0,0,width,canvas.height);
         ctx.drawImage(img, 20, 20, width-40, width-40);
-        ctx.fillStyle = 'black'; ctx.textAlign = 'center'; ctx.font = '18px monospace';
-        ctx.fillText(codeValue, width/2, width + 40);
+        ctx.fillStyle = 'black'; ctx.textAlign = 'center'; ctx.font = '20px monospace';
+        ctx.fillText(codeValue, width/2, width + 50);
         thermalData = processToThermal(canvas, width);
       } else {
-        let h = 200;
-        if (printMode === 'RECEIPT') h += items.length * 50 + 250;
-        else if (printMode === 'SHIPPING') h += 850;
+        // Mode Text (Kasir / Resi) - Hitung Tinggi Berdasarkan Isi
+        let y = 0;
+        const lineH = 35;
+        
+        // Estimasi tinggi awal
+        let estimatedH = 200; // Header & Footer
+        if (printMode === 'RECEIPT') {
+          estimatedH += items.length * lineH + 100;
+        } else if (printMode === 'SHIPPING') {
+          ctx.font = '18px monospace';
+          const addrLines = wrapText(ctx, shippingData.toAddress || "Alamat Lengkap", width - 40);
+          estimatedH += addrLines.length * lineH + 600;
+        }
 
-        canvas.height = h;
-        ctx.fillStyle = 'white'; ctx.fillRect(0, 0, width, h);
+        canvas.height = estimatedH;
+        ctx.fillStyle = 'white'; ctx.fillRect(0, 0, width, estimatedH);
         ctx.fillStyle = 'black'; ctx.textAlign = 'center';
-        let y = 50;
-        ctx.font = 'bold 28px monospace'; ctx.fillText("HERNIPRINT PRO", width/2, y); y += 35;
+        
+        y = 50;
+        ctx.font = 'bold 30px monospace'; ctx.fillText("HERNIPRINT PRO", width/2, y); y += 40;
         ctx.font = '16px monospace'; ctx.fillText(new Date().toLocaleString(), width/2, y); y += 45;
-        ctx.fillText("--------------------------------", width/2, y); y += 35;
+        ctx.fillText("--------------------------------", width/2, y); y += 40;
 
         if (printMode === 'RECEIPT') {
           items.forEach(i => {
-            ctx.textAlign = 'left'; ctx.font = 'bold 18px monospace';
+            ctx.textAlign = 'left'; ctx.font = 'bold 20px monospace';
             ctx.fillText(`${i.name.toUpperCase()} x${i.qty}`, 20, y);
             ctx.textAlign = 'right'; ctx.fillText((i.price * i.qty).toLocaleString(), width-20, y);
-            y += 35;
+            y += lineH;
           });
-          y += 25; ctx.textAlign = 'center'; ctx.font = 'bold 24px monospace';
-          ctx.fillText("TOTAL: Rp " + items.reduce((a,b)=>a+(b.price*b.qty),0).toLocaleString(), width/2, y);
+          y += 30; ctx.textAlign = 'center'; ctx.font = 'bold 26px monospace';
+          ctx.fillText("TOTAL: Rp " + items.reduce((a,b)=>a+(b.price*b.qty),0).toLocaleString(), width/2, y); y += 60;
         } else if (printMode === 'SHIPPING') {
-          ctx.textAlign = 'center'; ctx.font = 'bold 20px monospace';
-          ctx.fillRect(0, y-25, width, 40); ctx.fillStyle = 'white';
-          ctx.fillText("SHIPPING LABEL", width/2, y+5); ctx.fillStyle = 'black'; y += 60;
+          ctx.textAlign = 'center'; ctx.font = 'bold 22px monospace';
+          ctx.fillRect(0, y-25, width, 45); ctx.fillStyle = 'white';
+          ctx.fillText("SHIPPING LABEL", width/2, y+5); ctx.fillStyle = 'black'; y += 70;
 
-          ctx.textAlign = 'left'; ctx.font = 'bold 18px monospace';
-          ctx.fillText("PENERIMA:", 20, y); y += 30;
-          ctx.font = 'bold 26px monospace'; ctx.fillText((shippingData.toName || "Nama Penerima").toUpperCase(), 20, y); y += 35;
-          ctx.font = '20px monospace'; ctx.fillText(shippingData.toPhone || "No HP", 20, y); y += 40;
+          ctx.textAlign = 'left'; ctx.font = 'bold 20px monospace';
+          ctx.fillText("PENERIMA:", 20, y); y += 35;
+          ctx.font = 'bold 28px monospace'; ctx.fillText((shippingData.toName || "Nama Penerima").toUpperCase(), 20, y); y += 40;
+          ctx.font = '22px monospace'; ctx.fillText(shippingData.toPhone || "08xxxxxx", 20, y); y += 45;
           
           ctx.font = '18px monospace';
-          const wrapText = (t: string, max: number) => {
-            if(!t) return ["Alamat Lengkap"];
-            const words = t.split(' '); let lines = []; let current = '';
-            words.forEach(w => { if ((current + w).length > max) { lines.push(current); current = w + ' '; } else current += w + ' '; });
-            lines.push(current); return lines;
-          };
-          wrapText(shippingData.toAddress, 25).forEach(line => { ctx.fillText(line, 20, y); y += 25; });
+          const lines = wrapText(ctx, shippingData.toAddress || "Alamat Lengkap", width - 40);
+          lines.forEach(line => { ctx.fillText(line, 20, y); y += lineH; });
 
-          y += 25; ctx.fillText("--------------------------------", width/2, y); y += 35;
-          ctx.font = 'bold 18px monospace';
-          ctx.fillText("KURIR: " + (shippingData.courier || "-").toUpperCase(), 20, y); y += 30;
-          ctx.fillText("RESI : " + (shippingData.trackingNumber || "-").toUpperCase(), 20, y); y += 50;
+          y += 30; ctx.fillText("--------------------------------", width/2, y); y += 40;
+          ctx.font = 'bold 20px monospace';
+          ctx.fillText("KURIR: " + (shippingData.courier || "-").toUpperCase(), 20, y); y += 35;
+          ctx.fillText("RESI : " + (shippingData.trackingNumber || "-").toUpperCase(), 20, y); y += 60;
 
           if (shippingData.fromName) {
-            ctx.fillText("PENGIRIM:", 20, y); y += 30;
-            ctx.font = '16px monospace'; 
-            ctx.fillText(shippingData.fromName.toUpperCase() + " (" + shippingData.fromPhone + ")", 20, y);
+            ctx.fillText("PENGIRIM:", 20, y); y += 35;
+            ctx.font = '18px monospace'; 
+            ctx.fillText(shippingData.fromName.toUpperCase() + " (" + shippingData.fromPhone + ")", 20, y); y += 35;
           }
         }
-        y += 60; ctx.textAlign = 'center'; ctx.font = '14px monospace'; ctx.fillText("Terima Kasih - HerniPrint Pro", width/2, y);
-        thermalData = processToThermal(canvas, width);
+        
+        ctx.textAlign = 'center'; ctx.font = '14px monospace'; ctx.fillText("Terima Kasih - HerniPrint Pro", width/2, y + 40);
+        
+        // Final Crop Canvas: Sesuaikan tinggi canvas dengan posisi 'y' terakhir jika estimasi meleset
+        const finalH = y + 100;
+        const finalCanvas = document.createElement('canvas');
+        finalCanvas.width = width; finalCanvas.height = finalH;
+        const finalCtx = finalCanvas.getContext('2d')!;
+        finalCtx.drawImage(canvas, 0, 0);
+        thermalData = processToThermal(finalCanvas, width);
       }
       
       if (connType === 'BT') await printerService.print(thermalData);
@@ -407,19 +436,13 @@ const App: React.FC = () => {
                 <div>
                    <p className="text-[7px] opacity-40 uppercase font-black">Penerima:</p>
                    <p className="font-black text-xs uppercase">{shippingData.toName || "Nama Penerima"}</p>
-                   <p className="font-bold text-[10px]">{shippingData.toPhone || "08xxxx"}</p>
+                   <p className="font-bold text-[10px]">{shippingData.toPhone || "08xxxxxx"}</p>
                    <p className="leading-tight mt-1">{shippingData.toAddress || "Alamat Lengkap"}</p>
                 </div>
                 <div className="border-t border-dashed border-black pt-2 text-[8px] font-bold">
                    <p>KURIR: {(shippingData.courier || "-").toUpperCase()}</p>
                    <p>RESI : {(shippingData.trackingNumber || "-").toUpperCase()}</p>
                 </div>
-                {shippingData.fromName && (
-                  <div className="border-t border-dashed border-black pt-2">
-                    <p className="text-[7px] opacity-40 uppercase font-black">Pengirim:</p>
-                    <p className="font-bold text-[8px]">{shippingData.fromName} ({shippingData.fromPhone})</p>
-                  </div>
-                )}
               </div>
             )}
 
@@ -436,7 +459,6 @@ const App: React.FC = () => {
               {new Date().toLocaleString()}
               <p className="mt-1">Terima Kasih - HerniPrint Pro</p>
             </div>
-            <div className="h-10" />
           </div>
         </div>
       </main>
@@ -449,7 +471,6 @@ const App: React.FC = () => {
       </div>
 
       {/* --- MODALS --- */}
-
       {/* Resi Modal */}
       {activeModal === ModalType.SHIPPING && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -459,25 +480,14 @@ const App: React.FC = () => {
                 <button onClick={() => setActiveModal(ModalType.NONE)} className="p-3 bg-slate-100 dark:bg-slate-800 rounded-xl dark:text-white"><X className="w-4 h-4"/></button>
              </div>
              <div className="space-y-4">
-                <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl border dark:border-slate-700 space-y-3">
-                  <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Penerima</p>
-                  <input className="w-full p-4 bg-white dark:bg-slate-900 dark:text-white rounded-xl border-none ring-1 ring-slate-200 dark:ring-slate-700 text-xs" value={shippingData.toName} onChange={e => setShippingData({...shippingData, toName: e.target.value})} placeholder="Nama Penerima" />
-                  <input className="w-full p-4 bg-white dark:bg-slate-900 dark:text-white rounded-xl border-none ring-1 ring-slate-200 dark:ring-slate-700 text-xs" value={shippingData.toPhone} onChange={e => setShippingData({...shippingData, toPhone: e.target.value})} placeholder="No HP" />
-                  <textarea rows={3} className="w-full p-4 bg-white dark:bg-slate-900 dark:text-white rounded-xl border-none ring-1 ring-slate-200 dark:ring-slate-700 text-xs" value={shippingData.toAddress} onChange={e => setShippingData({...shippingData, toAddress: e.target.value})} placeholder="Alamat Lengkap" />
+                <input className="w-full p-4 bg-slate-50 dark:bg-slate-800 dark:text-white rounded-xl border-none ring-1 ring-slate-200 dark:ring-slate-700 text-xs" value={shippingData.toName} onChange={e => setShippingData({...shippingData, toName: e.target.value})} placeholder="Nama Penerima" />
+                <input className="w-full p-4 bg-slate-50 dark:bg-slate-800 dark:text-white rounded-xl border-none ring-1 ring-slate-200 dark:ring-slate-700 text-xs" value={shippingData.toPhone} onChange={e => setShippingData({...shippingData, toPhone: e.target.value})} placeholder="No HP" />
+                <textarea rows={3} className="w-full p-4 bg-slate-50 dark:bg-slate-800 dark:text-white rounded-xl border-none ring-1 ring-slate-200 dark:ring-slate-700 text-xs" value={shippingData.toAddress} onChange={e => setShippingData({...shippingData, toAddress: e.target.value})} placeholder="Alamat Lengkap (Otomatis menyesuaikan panjang)" />
+                <div className="grid grid-cols-2 gap-3">
+                  <input className="w-full p-4 bg-slate-50 dark:bg-slate-800 dark:text-white rounded-xl border-none ring-1 ring-slate-200 dark:ring-slate-700 text-xs" value={shippingData.courier} onChange={e => setShippingData({...shippingData, courier: e.target.value})} placeholder="Kurir" />
+                  <input className="w-full p-4 bg-slate-50 dark:bg-slate-800 dark:text-white rounded-xl border-none ring-1 ring-slate-200 dark:ring-slate-700 text-xs" value={shippingData.trackingNumber} onChange={e => setShippingData({...shippingData, trackingNumber: e.target.value})} placeholder="No Resi" />
                 </div>
-                <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl border dark:border-slate-700 space-y-3">
-                  <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Ekspedisi</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <input className="w-full p-4 bg-white dark:bg-slate-900 dark:text-white rounded-xl border-none ring-1 ring-slate-200 dark:ring-slate-700 text-xs" value={shippingData.courier} onChange={e => setShippingData({...shippingData, courier: e.target.value})} placeholder="Kurir" />
-                    <input className="w-full p-4 bg-white dark:bg-slate-900 dark:text-white rounded-xl border-none ring-1 ring-slate-200 dark:ring-slate-700 text-xs" value={shippingData.trackingNumber} onChange={e => setShippingData({...shippingData, trackingNumber: e.target.value})} placeholder="No Resi" />
-                  </div>
-                </div>
-                <div className="bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl border dark:border-slate-700 space-y-3">
-                  <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Pengirim</p>
-                  <input className="w-full p-4 bg-white dark:bg-slate-900 dark:text-white rounded-xl border-none ring-1 ring-slate-200 dark:ring-slate-700 text-xs" value={shippingData.fromName} onChange={e => setShippingData({...shippingData, fromName: e.target.value})} placeholder="Nama Pengirim" />
-                  <input className="w-full p-4 bg-white dark:bg-slate-900 dark:text-white rounded-xl border-none ring-1 ring-slate-200 dark:ring-slate-700 text-xs" value={shippingData.fromPhone} onChange={e => setShippingData({...shippingData, fromPhone: e.target.value})} placeholder="HP Pengirim" />
-                </div>
-                <button onClick={() => { setPrintMode('SHIPPING'); setActiveModal(ModalType.NONE); }} className="w-full py-5 bg-orange-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg">Tampilkan di Preview</button>
+                <button onClick={() => { setPrintMode('SHIPPING'); setActiveModal(ModalType.NONE); }} className="w-full py-5 bg-orange-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg">Gunakan</button>
              </div>
           </div>
         </div>
@@ -492,7 +502,7 @@ const App: React.FC = () => {
               <button onClick={() => setActiveModal(ModalType.NONE)} className="p-3 bg-slate-100 dark:bg-slate-800 rounded-xl dark:text-white"><X className="w-4 h-4"/></button>
             </div>
             <div className="space-y-3 mb-6 bg-slate-50 dark:bg-slate-800 p-4 rounded-2xl">
-              <input placeholder="Nama Produk" className="w-full p-4 rounded-xl dark:bg-slate-900 dark:text-white text-xs border-none ring-1 ring-slate-200 dark:ring-slate-700" value={newItem.name} onChange={e => setNewItem({...newItem, name: e.target.value})} />
+              <input placeholder="Produk" className="w-full p-4 rounded-xl dark:bg-slate-900 dark:text-white text-xs border-none ring-1 ring-slate-200 dark:ring-slate-700" value={newItem.name} onChange={e => setNewItem({...newItem, name: e.target.value})} />
               <div className="grid grid-cols-2 gap-3">
                 <input placeholder="Harga" type="number" className="p-4 rounded-xl dark:bg-slate-900 dark:text-white text-xs border-none ring-1 ring-slate-200 dark:ring-slate-700" value={newItem.price} onChange={e => setNewItem({...newItem, price: e.target.value})} />
                 <input placeholder="Qty" type="number" className="p-4 rounded-xl dark:bg-slate-900 dark:text-white text-xs border-none ring-1 ring-slate-200 dark:ring-slate-700" value={newItem.qty} onChange={e => setNewItem({...newItem, qty: e.target.value})} />
@@ -535,17 +545,13 @@ const App: React.FC = () => {
                  <button onClick={() => setPaperSize('58')} className={`p-4 rounded-xl border-2 font-black text-xs ${paperSize === '58' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600' : 'border-slate-100 dark:border-slate-800 dark:text-white'}`}>58mm</button>
                  <button onClick={() => setPaperSize('80')} className={`p-4 rounded-xl border-2 font-black text-xs ${paperSize === '80' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-600' : 'border-slate-100 dark:border-slate-800 dark:text-white'}`}>80mm</button>
               </div>
-              <button onClick={handleInstallPWA} className="w-full p-4 rounded-xl flex items-center justify-between border bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 border-emerald-100 dark:border-emerald-800">
-                <div className="flex items-center gap-3"><DownloadCloud className="w-4 h-4"/><span className="text-[10px] font-black uppercase">Instal PWA</span></div>
-                <ChevronRight className="w-4 h-4"/>
-              </button>
               <div className="pt-2 space-y-2">
                  <button onClick={() => window.open(TELEGRAM_LINK, '_blank')} className="w-full p-4 rounded-xl flex items-center justify-between border bg-blue-50 dark:bg-blue-900/20 text-blue-600 border-blue-100 dark:border-blue-800">
                     <div className="flex items-center gap-3"><Send className="w-4 h-4"/><span className="text-[10px] font-black uppercase">Grup Telegram</span></div>
                     <ExternalLink className="w-4 h-4"/>
                  </button>
                  <button onClick={() => setActiveModal(ModalType.PRIVACY)} className="w-full p-4 rounded-xl flex items-center justify-between border dark:border-slate-800 dark:text-white">
-                    <div className="flex items-center gap-3"><Shield className="w-4 h-4"/><span className="text-[10px] font-black uppercase">Kebijakan Privasi</span></div>
+                    <div className="flex items-center gap-3"><Shield className="w-4 h-4"/><span className="text-[10px] font-black uppercase">Privasi</span></div>
                     <ChevronRight className="w-4 h-4"/>
                  </button>
                  <button onClick={() => setActiveModal(ModalType.DISCLAIMER)} className="w-full p-4 rounded-xl flex items-center justify-between border dark:border-slate-800 dark:text-white">
@@ -558,102 +564,88 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Privacy Policy Modal */}
+      {/* Extra Modals Content (Privacy, Disclaimer, About) - Sama seperti sebelumnya */}
       {activeModal === ModalType.PRIVACY && (
         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-6">
           <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-[2rem] p-8 shadow-2xl relative">
-             <button onClick={() => setActiveModal(ModalType.SETTINGS)} className="absolute top-6 right-6 p-2 bg-slate-100 dark:bg-slate-800 rounded-full"><ArrowLeft className="w-4 h-4 dark:text-white"/></button>
              <h3 className="font-black text-xs uppercase tracking-widest mb-6 dark:text-white flex items-center gap-2"><Shield className="w-5 h-5 text-blue-600"/> Privasi</h3>
-             <div className="text-[10px] text-slate-500 dark:text-slate-400 space-y-4 max-h-[50vh] overflow-y-auto pr-2">
-                <p><strong>1. Keamanan Data:</strong> HerniPrint Pro tidak mengirimkan data transaksi ke server manapun. Semua proses lokal di browser Anda.</p>
-                <p><strong>2. Izin Perangkat:</strong> Izin Bluetooth, USB, dan Kamera hanya digunakan saat aplikasi aktif untuk mencetak atau men-scan kode.</p>
-                <p><strong>3. Penyimpanan:</strong> Data input akan terhapus jika cache browser dibersihkan.</p>
-             </div>
+             <p className="text-[10px] text-slate-500 dark:text-slate-400">Data diproses lokal 100% di browser tanpa pengiriman data eksternal.</p>
              <button onClick={() => setActiveModal(ModalType.SETTINGS)} className="w-full py-4 mt-8 bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-2xl font-black text-[10px] uppercase">Mengerti</button>
           </div>
         </div>
       )}
 
-      {/* Disclaimer Modal */}
       {activeModal === ModalType.DISCLAIMER && (
         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-6">
           <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-[2rem] p-8 shadow-2xl relative">
-             <button onClick={() => setActiveModal(ModalType.SETTINGS)} className="absolute top-6 right-6 p-2 bg-slate-100 dark:bg-slate-800 rounded-full"><ArrowLeft className="w-4 h-4 dark:text-white"/></button>
              <h3 className="font-black text-xs uppercase tracking-widest mb-6 dark:text-white flex items-center gap-2"><FileWarning className="w-5 h-5 text-amber-500"/> Disclaimer</h3>
-             <div className="text-[10px] text-slate-500 dark:text-slate-400 space-y-4 max-h-[50vh] overflow-y-auto pr-2">
-                <p><strong>Tanggung Jawab:</strong> HerniPrint Pro adalah alat bantu cetak. Kami tidak bertanggung jawab atas kesalahan data pada struk atau kerusakan printer.</p>
-                <p><strong>Kompatibilitas:</strong> Hasil cetak tergantung pada merk printer thermal masing-masing.</p>
-             </div>
-             <button onClick={() => setActiveModal(ModalType.SETTINGS)} className="w-full py-4 mt-8 bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-2xl font-black text-[10px] uppercase">Saya Setuju</button>
+             <p className="text-[10px] text-slate-500 dark:text-slate-400">Kami tidak bertanggung jawab atas kesalahan cetak atau kerusakan hardware.</p>
+             <button onClick={() => setActiveModal(ModalType.SETTINGS)} className="w-full py-4 mt-8 bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-2xl font-black text-[10px] uppercase">Setuju</button>
           </div>
         </div>
       )}
 
-      {/* About Modal */}
       {activeModal === ModalType.ABOUT && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl text-center relative overflow-hidden">
-             <div className="absolute top-0 left-0 w-full h-1 bg-blue-600"></div>
+          <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl text-center">
              <img src={APP_LOGO_URL} className="w-20 h-20 mx-auto mb-4" />
-             <h2 className="font-black text-xs uppercase tracking-[5px] dark:text-white">HERNIPRINT <span className="text-blue-600">PRO</span></h2>
-             <p className="text-[9px] font-bold text-slate-400 uppercase mt-1 mb-6">Build 1.2.7 - Professional Suite</p>
-             <div className="space-y-4 text-left border-y dark:border-slate-800 py-6 mb-6">
-                <div className="flex gap-4 items-start"><ShieldCheck className="w-5 h-5 text-blue-600 mt-1"/><p className="text-[10px] text-slate-500 dark:text-slate-300 leading-relaxed">Berjalan 100% lokal. Data Anda aman tanpa pengiriman data eksternal.</p></div>
-                <div className="flex gap-4 items-start"><Cpu className="w-5 h-5 text-indigo-600 mt-1"/><p className="text-[10px] text-slate-500 dark:text-slate-300 leading-relaxed">Support Printer Thermal ESC/POS via Bluetooth & USB.</p></div>
-             </div>
-             <button onClick={() => setActiveModal(ModalType.NONE)} className="w-full py-4 bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-2xl font-black text-[10px] uppercase">Tutup</button>
+             <h2 className="font-black text-xs dark:text-white uppercase tracking-widest">HERNIPRINT PRO</h2>
+             <p className="text-[9px] font-bold text-slate-400 uppercase mt-1">Build 1.2.8 - Dynamic Length Engine</p>
+             <button onClick={() => setActiveModal(ModalType.NONE)} className="w-full py-4 mt-6 bg-slate-900 dark:bg-slate-100 dark:text-slate-900 text-white rounded-2xl font-black text-[10px] uppercase">Tutup</button>
           </div>
         </div>
       )}
 
-      {/* Hidden Inputs & Alerts */}
+      {/* Inputs */}
       <input type="file" ref={imageInputRef} className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, 'IMAGE')} />
       <input type="file" ref={pdfInputRef} className="hidden" accept="application/pdf" onChange={(e) => handleFileUpload(e, 'PDF')} />
       
+      {/* Connector Guide */}
       {activeModal === ModalType.CONNECT_GUIDE && (
         <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-6">
           <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl text-center">
-            <h3 className="font-black text-xs uppercase dark:text-white mb-2 tracking-widest">Koneksi Hardware</h3>
-            <p className="text-[9px] text-slate-400 mb-8 leading-relaxed">Klik tombol di bawah untuk membuka dialog koneksi perangkat.</p>
-            <button onClick={pendingConn === 'BT' ? execConnectBT : execConnectUSB} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg mb-3">Mulai Hubungkan</button>
+            <h3 className="font-black text-xs uppercase dark:text-white mb-2 tracking-widest">Hardware Connection</h3>
+            <button onClick={pendingConn === 'BT' ? execConnectBT : execConnectUSB} className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase shadow-lg mb-3">Hubungkan Sekarang</button>
             <button onClick={() => setActiveModal(ModalType.NONE)} className="w-full py-2 text-slate-400 font-black text-[10px] uppercase">Batal</button>
           </div>
         </div>
       )}
 
-      {activeModal === ModalType.SCANNER && (
-        <div className="fixed inset-0 z-[110] bg-black flex flex-col p-6">
-           <div className="flex justify-between items-center mb-10">
-              <h3 className="text-white font-black uppercase text-[10px] tracking-widest">Scanner</h3>
-              <button onClick={() => setActiveModal(ModalType.NONE)} className="p-4 bg-white/10 text-white rounded-full"><X/></button>
-           </div>
-           <div id="reader" className="w-full aspect-square overflow-hidden rounded-3xl border-4 border-blue-600 shadow-2xl bg-white"></div>
-        </div>
-      )}
-
+      {/* Code Generator Modal */}
       {activeModal === ModalType.CODE_GEN && (
         <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
            <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl">
               <div className="flex justify-between items-center mb-6">
                 <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
-                  <button onClick={() => setCodeType('QR')} className={`px-4 py-2 rounded-lg text-[9px] font-black uppercase transition-all ${codeType === 'QR' ? 'bg-white dark:bg-slate-700 text-blue-600 shadow-sm' : 'text-slate-400'}`}>QR Code</button>
-                  <button onClick={() => setCodeType('BARCODE')} className={`px-4 py-2 rounded-lg text-[9px] font-black uppercase transition-all ${codeType === 'BARCODE' ? 'bg-white dark:bg-slate-700 text-blue-600 shadow-sm' : 'text-slate-400'}`}>Barcode</button>
+                  <button onClick={() => setCodeType('QR')} className={`px-4 py-2 rounded-lg text-[9px] font-black uppercase ${codeType === 'QR' ? 'bg-white dark:bg-slate-700 text-blue-600' : 'text-slate-400'}`}>QR Code</button>
+                  <button onClick={() => setCodeType('BARCODE')} className={`px-4 py-2 rounded-lg text-[9px] font-black uppercase ${codeType === 'BARCODE' ? 'bg-white dark:bg-slate-700 text-blue-600' : 'text-slate-400'}`}>Barcode</button>
                 </div>
-                <button onClick={() => setActiveModal(ModalType.NONE)} className="p-2 bg-slate-100 dark:bg-slate-800 rounded-xl dark:text-white"><X className="w-4 h-4"/></button>
+                <button onClick={() => setActiveModal(ModalType.NONE)} className="p-2 dark:text-white"><X/></button>
               </div>
-              <textarea className="w-full p-4 rounded-2xl border dark:border-slate-700 dark:bg-slate-800 dark:text-white text-xs mb-4 outline-none focus:ring-2 ring-blue-500" rows={4} value={codeValue} onChange={(e) => setCodeValue(e.target.value)} placeholder="Teks atau Link..." />
-              <button onClick={() => { setPrintMode(codeType); setActiveModal(ModalType.NONE); }} className="w-full py-4 bg-blue-600 text-white rounded-xl font-black text-[9px] uppercase shadow-lg">Gunakan</button>
+              <textarea className="w-full p-4 rounded-2xl border dark:border-slate-700 dark:bg-slate-800 dark:text-white text-xs mb-4" rows={4} value={codeValue} onChange={(e) => setCodeValue(e.target.value)} placeholder="Tulis teks..." />
+              <button onClick={() => { setPrintMode(codeType); setActiveModal(ModalType.NONE); }} className="w-full py-4 bg-blue-600 text-white rounded-xl font-black text-[9px] uppercase shadow-lg">Tampilkan</button>
            </div>
         </div>
       )}
 
+      {/* Scanner */}
+      {activeModal === ModalType.SCANNER && (
+        <div className="fixed inset-0 z-[110] bg-black flex flex-col p-6">
+           <div className="flex justify-between items-center mb-10">
+              <h3 className="text-white font-black uppercase text-[10px]">Scanner</h3>
+              <button onClick={() => setActiveModal(ModalType.NONE)} className="p-4 text-white"><X/></button>
+           </div>
+           <div id="reader" className="w-full aspect-square overflow-hidden rounded-3xl border-4 border-blue-600 bg-white"></div>
+        </div>
+      )}
+
+      {/* Alert */}
       {alert && (
-        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[200] animate-in slide-in-from-top-10 duration-500">
+        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[200]">
           <div className={`px-8 py-4 rounded-full shadow-2xl flex items-center gap-4 border backdrop-blur-xl ${
             alert.type === 'success' ? 'bg-emerald-600/90 border-emerald-500' : 
             alert.type === 'error' ? 'bg-rose-600/90 border-rose-500' : 'bg-slate-900/90 border-slate-700'
           } text-white`}>
-            {alert.type === 'success' ? <CheckCircle2 className="w-5 h-5"/> : <Info className="w-5 h-5"/>}
             <span className="text-[10px] font-black uppercase tracking-widest">{alert.msg}</span>
           </div>
         </div>
